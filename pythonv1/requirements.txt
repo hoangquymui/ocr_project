@@ -1,0 +1,26 @@
+# --- BỘ CỐT LÕI (CORE COMPONENT & OCR) ---
+numpy==1.26.4
+paddlepaddle==2.6.2
+paddleocr==2.7.3
+vietocr==0.3.11
+
+# --- XỬ LÝ ẢNH & FILE (Duy nhất HEADLESS cho Docker) ---
+opencv-python-headless==4.9.0.80
+pymupdf==1.26.3
+python-docx
+Pillow==10.2.0
+shapely
+pyclipper
+
+# --- ĐỊNH DẠNG & TIỆN ÍCH ---
+openpyxl
+lxml
+beautifulsoup4
+requests
+rapidfuzz
+tqdm
+lmdb
+
+# --- SỬA LỖI CHO PYTHON 3.10+ ---
+# Thư viện này tự động vá lỗi "collections.Mapping" của attrdict trên Python mới
+collections-fastfix

@@ -1,0 +1,82 @@
+# ==========================================
+# NestJS & Node.js Core
+# ==========================================
+node_modules/
+/dist
+/artifacts
+/coverage
+.npm
+.eslintcache
+.prettiercache
+
+# ==========================================
+# Environment & Secrets (Bảo mật - KHÔNG ĐƯỢC CÚP LÊN GIT)
+# ==========================================
+.env
+.env.development
+.env.production
+.env.staging
+.env.local
+.env.*.local
+
+# ==========================================
+# TypeScript & Build Tools
+# ==========================================
+*.tsbuildinfo
+tsconfig.tsbuildinfo
+
+# ==========================================
+# Logs & Debugging
+# ==========================================
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+.pids
+*.pid
+*.seed
+*.pid.lock
+
+# ==========================================
+# IDEs & Text Editors
+# ==========================================
+# VS Code
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+
+# WebStorm / IntelliJ
+.idea/
+
+# Các editor khác
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ==========================================
+# Operating System Files
+# ==========================================
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ==========================================
+# Docker (Nếu bạn dùng Docker, thường giữ lại Dockerfile nhưng bỏ data)
+# ==========================================
+.dockerignore
+# docker/db-data/ # Bỏ comment nếu bạn map volume database ra ngoài
+
+# ==========================================
+# Optional: Testing & Databases
+# ==========================================
+.nyc_output
+.dynamodb/
+*.db
+*.sqlite

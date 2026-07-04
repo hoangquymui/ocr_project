@@ -1,0 +1,34 @@
+# --- BỘ KHỞI CHẠY API GATEWAY ---
+fastapi==0.111.0
+uvicorn==0.30.1
+python-multipart==0.0.9
+
+# --- BỘ CỐT LÕI (CORE COMPONENT & OCR) ---
+numpy==1.26.4
+paddlepaddle==2.6.2
+paddleocr==2.7.3
+
+# Cập nhật cụm Torch và Torchvision bản nhẹ (CPU-only) cho VietOCR
+torch==2.2.2 --extra-index-url https://download.pytorch.org/whl/cpu
+torchvision==0.17.2 --extra-index-url https://download.pytorch.org/whl/cpu
+
+vietocr==0.3.11
+
+# --- XỬ LÝ ẢNH & FILE ---
+opencv-python-headless==4.9.0.80
+pymupdf==1.26.3
+python-docx
+Pillow==10.2.0
+shapely
+pyclipper
+
+# --- ĐỊNH DẠNG & TIỆN ÍCH ---
+openpyxl
+lxml
+beautifulsoup4
+requests
+rapidfuzz
+tqdm
+lmdb
+
+# python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload

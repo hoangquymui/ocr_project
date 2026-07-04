@@ -1,0 +1,10 @@
+# ==========================================
+# Python Virtual Environments
+# ==========================================
+.venv/
+venv/
+ENV/
+env/
+output_scan_ocr/
+paddleocr/
+models/
