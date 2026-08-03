@@ -181,12 +181,11 @@ def detect_image_regions(page):
     # Lấy vùng không trắng
     _, binary = cv2.threshold(gray, 245, 255, cv2.THRESH_BINARY_INV)
 
-    binary = remove_text_regions(binary, page, padding=12)
-    binary = remove_border_regions(binary, page)
+    binary = remove_text_regions(binary, page, padding=8)
     binary = remove_table_lines(binary)
 
     # Gom các nét đen của logo/hình thực sự thành vùng lớn
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (12, 12))
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
 
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -198,34 +197,33 @@ def detect_image_regions(page):
         x, y, w, h = cv2.boundingRect(cnt)
         area = w * h
 
-        # Loại bỏ các vết nhiễu hoặc đường viền mỏng nhỏ
-        if area < 8000:
+        # Lọc bỏ các vết nhiễu li ti (giữ logo nhỏ từ 45x45px hoặc diện tích >= 2000px)
+        if area < 2000:
             continue
 
-        if w < 70 or h < 70:
+        if w < 40 or h < 40:
             continue
 
-        # Loại bỏ mảnh đường kẻ ngang/dọc sót lại (Aspect Ratio quá lệch)
+        # Lọc bỏ mảnh đường kẻ ngang/dọc dài quá lệch
         aspect_ratio = w / float(h)
-        if aspect_ratio > 4.5 or aspect_ratio < 0.22:
+        if aspect_ratio > 6.0 or aspect_ratio < 0.15:
             continue
 
-        # Loại bỏ các vùng nằm sát viền hoặc chiếm hầu hết chiều rộng trang
-        if w > page["width"] * 0.7 or h > page["height"] * 0.6:
+        # Lọc bỏ các vùng chiếm hầu hết chiều rộng/chiều cao trang
+        if w > page["width"] * 0.85 or h > page["height"] * 0.75:
             continue
 
-        # Lọc bỏ các vùng chứa nhiều hơn 1 dòng văn bản (bảng chứa chữ)
+        # Lọc bỏ các vùng chứa nhiều hơn 2 dòng văn bản (bảng chứa chữ)
         overlapping_text_lines = 0
         for l in lines_in_page:
             lb = l["bbox"]
-            # Kiểm tra xem dòng chữ có nằm trong bounding box này không
             if not (lb["x_max"] < x or lb["x_min"] > x + w or lb["y_max"] < y or lb["y_min"] > y + h):
                 overlapping_text_lines += 1
 
-        if overlapping_text_lines >= 2:
+        if overlapping_text_lines >= 3:
             continue
 
-        pad = 8
+        pad = 6
         x1 = max(0, x - pad)
         y1 = max(0, y - pad)
         x2 = min(img.shape[1], x + w + pad)
@@ -233,10 +231,10 @@ def detect_image_regions(page):
 
         crop = img[y1:y2, x1:x2]
 
-        # Kiểm tra độ lệch chuẩn màu sắc (Ảnh/Logo thật có màu sắc đa dạng)
+        # Lọc ô trắng phẳng hoàn toàn (std_dev < 8)
         crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
         std_dev = np.std(crop_gray)
-        if std_dev < 18:  # Nếu vùng bị phẳng màu (khung ô trắng), bỏ qua
+        if std_dev < 8:
             continue
 
         crop_path = os.path.join(
@@ -263,6 +261,70 @@ def detect_image_regions(page):
     return images
 
 
+def detect_table_and_cover_regions(page):
+    """
+    Tách biệt rõ ràng giữa Bảng Biểu (Table) và Khung Bìa Trang (Cover Frame).
+    Khung bìa bao phủ toàn bộ trang (w > 75% width & h > 75% height) sẽ được gắn nhãn [COVER FRAME].
+    """
+    image_path = page["image_path"]
+    img = cv2.imread(image_path)
+    if img is None:
+        return [], []
+
+    page_w = page["width"]
+    page_h = page["height"]
+
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+
+    kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 1))
+    lines_h = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_h)
+
+    kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 50))
+    lines_v = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_v)
+
+    table_grid = cv2.add(lines_h, lines_v)
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+    table_mask = cv2.morphologyEx(table_grid, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+
+    contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    tables = []
+    cover_frames = []
+
+    for idx, cnt in enumerate(contours, start=1):
+        x, y, w, h = cv2.boundingRect(cnt)
+        
+        # Nếu viền bao phủ > 75% chiều rộng VÀ chiều cao toàn trang ➡️ Khung Bìa Trang (Cover Frame)
+        if w > page_w * 0.75 and h > page_h * 0.75:
+            cover_frames.append({
+                "frame_id": len(cover_frames) + 1,
+                "type": "cover_frame",
+                "bbox": {
+                    "x_min": float(x),
+                    "y_min": float(y),
+                    "x_max": float(x + w),
+                    "y_max": float(y + h),
+                    "width": float(w),
+                    "height": float(h)
+                }
+            })
+        elif w >= 160 and h >= 60:
+            tables.append({
+                "table_id": len(tables) + 1,
+                "type": "table_region",
+                "bbox": {
+                    "x_min": float(x),
+                    "y_min": float(y),
+                    "x_max": float(x + w),
+                    "y_max": float(y + h),
+                    "width": float(w),
+                    "height": float(h)
+                }
+            })
+
+    return tables, cover_frames
+
+
 def draw_layout_debug(page):
     image_path = page["image_path"]
     img = cv2.imread(image_path)
@@ -270,7 +332,7 @@ def draw_layout_debug(page):
     if img is None:
         return
 
-    # Text boxes xanh
+    # Text boxes xanh lá
     for line in page.get("lines", []):
         bbox = line["bbox"]
         x1 = int(bbox["x_min"])
@@ -307,6 +369,46 @@ def draw_layout_debug(page):
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
             (255, 0, 0),
+            2
+        )
+
+    # Khung bìa trang màu Cam/Vàng (ORANGE)
+    for frame in page.get("cover_frames", []):
+        bbox = frame["bbox"]
+        x1 = int(bbox["x_min"])
+        y1 = int(bbox["y_min"])
+        x2 = int(bbox["x_max"])
+        y2 = int(bbox["y_max"])
+
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 165, 255), 4)
+
+        cv2.putText(
+            img,
+            f"[COVER FRAME {frame['frame_id']}]",
+            (x1 + 10, y1 + 35),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.9,
+            (0, 165, 255),
+            2
+        )
+
+    # Table region boxes màu Tím (MAGENTA)
+    for tbl in page.get("tables", []):
+        bbox = tbl["bbox"]
+        x1 = int(bbox["x_min"])
+        y1 = int(bbox["y_min"])
+        x2 = int(bbox["x_max"])
+        y2 = int(bbox["y_max"])
+
+        cv2.rectangle(img, (x1, y1), (x2, y2), (255, 0, 255), 3)
+
+        cv2.putText(
+            img,
+            f"[TABLE {tbl['table_id']}]",
+            (x1, max(25, y1 - 8)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 0, 255),
             2
         )
 
@@ -348,6 +450,9 @@ def analyze_page(page):
 
     page["lines"] = final_lines
     page["images"] = detect_image_regions(page)
+    tables, cover_frames = detect_table_and_cover_regions(page)
+    page["tables"] = tables
+    page["cover_frames"] = cover_frames
 
     page["blocks"] = []
 

@@ -22,14 +22,12 @@ def setup_standard_page_margins(section):
 
 
 def set_table_borders_none(table):
-    """ Xóa toàn bộ viền bảng để tạo Bảng Ẩn (Invisible Table) """
+    """ Xóa toàn bộ viền bảng (Invisible Table cho văn bản 2 bên) """
     tblPr = table._tbl.tblPr
-    # Xóa viền cũ nếu có
     for child in list(tblPr):
         if child.tag.endswith('tblBorders'):
             tblPr.remove(child)
 
-    # Thêm viền trong suốt
     borders_xml = parse_xml(
         f'<w:tblBorders {nsdecls("w")}>\n'
         '  <w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>\n'
@@ -41,6 +39,40 @@ def set_table_borders_none(table):
         '</w:tblBorders>'
     )
     tblPr.append(borders_xml)
+
+
+def set_table_borders_visible(table):
+    """ Thiết lập đường kẻ viền bảng hiển thị nét mảnh màu đen/xám rõ ràng (Table Grid) """
+    tblPr = table._tbl.tblPr
+    for child in list(tblPr):
+        if child.tag.endswith('tblBorders'):
+            tblPr.remove(child)
+
+    borders_xml = parse_xml(
+        f'<w:tblBorders {nsdecls("w")}>\n'
+        '  <w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '  <w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '  <w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '  <w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '  <w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '  <w:insideV w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '</w:tblBorders>'
+    )
+    tblPr.append(borders_xml)
+
+
+def is_line_inside_table(line, tables):
+    """ Kiểm tra xem dòng chữ có nằm trong khu vực Bảng Biểu được phát hiện ở Step 2 không """
+    if not tables:
+        return False
+    lb = line["bbox"]
+    l_cx = (lb["x_min"] + lb["x_max"]) / 2
+    l_cy = (lb["y_min"] + lb["y_max"]) / 2
+    for tbl in tables:
+        tb = tbl["bbox"]
+        if tb["x_min"] <= l_cx <= tb["x_max"] and tb["y_min"] <= l_cy <= tb["y_max"]:
+            return True
+    return False
 
 
 def get_alignment_enum(align_str):
@@ -95,6 +127,8 @@ def main():
             section = doc.sections[-1]
             setup_standard_page_margins(section)
 
+        tables_in_page = page.get("tables", [])
+
         # 1. Chèn Logo / Hình ảnh trang (nếu có)
         for image in page.get("images", []):
             img_path = image.get("path") or image.get("image_path")
@@ -111,10 +145,8 @@ def main():
         # 2. Gom các dòng chữ thành Khối theo thứ tự đọc (Reading Order Flow)
         lines = page.get("lines", [])
 
-        # Phân loại khối 2 cột song song vs khối 1 cột đơn
         lines_sorted = sorted(lines, key=lambda l: (l.get("order") or l.get("line_id") or 0))
 
-        # Gom dòng song song trên cùng mức Y để tạo Bảng Ẩn (Borderless Table)
         grouped_rows = []
         current_row = []
 
@@ -124,7 +156,6 @@ def main():
             else:
                 last_y = current_row[-1]["bbox"]["y_min"]
                 curr_y = line["bbox"]["y_min"]
-                # Nếu 2 dòng nằm trên cùng 1 dải ngang Y (song song 2 cột)
                 if abs(curr_y - last_y) < 18:
                     current_row.append(line)
                 else:
@@ -136,8 +167,11 @@ def main():
 
         # 3. Dựng văn bản trôi chảy (Flow Layout)
         for row in grouped_rows:
-            # Trường hợp 1 dòng đơn (Paragraph chuẩn)
-            if len(row) == 1:
+            # Kiểm tra xem hàng này có nằm trong vùng Bảng Biểu không
+            is_table_row = any(is_line_inside_table(l, tables_in_page) for l in row)
+
+            # Trường hợp 1 dòng đơn ngoài bảng (Paragraph chuẩn)
+            if len(row) == 1 and not is_table_row:
                 line = row[0]
                 text = line.get("text", "").strip()
                 if not text:
@@ -161,14 +195,20 @@ def main():
                     space_after=4
                 )
 
-            # Trường hợp 2+ dòng song song (Tự tạo Bảng Ẩn Không Viền)
+            # Trường hợp thuộc Bảng Biểu hoặc 2+ dòng song song
             else:
                 row_sorted = sorted(row, key=lambda l: l["bbox"]["x_min"])
                 num_cols = len(row_sorted)
 
                 table = doc.add_table(rows=1, cols=num_cols)
                 table.alignment = WD_TABLE_ALIGNMENT.CENTER
-                set_table_borders_none(table)
+                
+                # Nếu là Bảng thật ➡️ Vẽ đường kẻ viền đen/xám rõ ràng!
+                if is_table_row:
+                    set_table_borders_visible(table)
+                else:
+                    # Nếu chỉ là căn 2 bên ➡️ Ẩn viền
+                    set_table_borders_none(table)
 
                 cell_width = Inches(6.7 / num_cols)
 
@@ -179,16 +219,16 @@ def main():
                     if text:
                         p = cell.paragraphs[0]
                         p.alignment = get_alignment_enum(line.get("alignment", "LEFT"))
-                        p.paragraph_format.space_before = Pt(0)
+                        p.paragraph_format.space_before = Pt(2)
                         p.paragraph_format.space_after = Pt(2)
                         
                         run = p.add_run(text)
                         run.font.name = "Times New Roman"
-                        run.font.size = Pt(11)
+                        run.font.size = Pt(10.5 if is_table_row else 11)
                         run.font.color.rgb = RGBColor(0, 0, 0)
 
     doc.save(OUTPUT_DOCX)
-    print("✅ ĐÃ XUẤT THÀNH CÔNG FILE WORD NATIVE FLOW TẠI:", OUTPUT_DOCX)
+    print("✅ ĐÃ XUẤT THÀNH CÔNG FILE WORD CÓ KẺ BẢNG TẠI:", OUTPUT_DOCX)
 
 
 if __name__ == "__main__":

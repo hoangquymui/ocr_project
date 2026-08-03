@@ -14,14 +14,18 @@ from fastapi.responses import FileResponse
 from PIL import Image
 from rapidocr_onnxruntime import RapidOCR
 
-from app.pipeline import VietOCRONNXPredictor, process_layout_alignment, create_docx_document
+from app.pipeline import (
+    VietOCRONNXPredictor,
+    process_layout_alignment,
+    create_docx_document,
+    detect_table_regions_api
+)
 
 app = FastAPI(title="End-to-End Pipeline OCR API", version="4.0")
 
 TEMP_DIR = "/tmp/ocr_pipeline"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# --- KHỞI TẠO MODEL LÚC BẬT DỊCH VỤ ---
 print(">>> [API LOG] Khởi tạo RapidOCR ONNX Runtime Engine (Detector)...")
 rapid_engine = RapidOCR()
 
@@ -111,18 +115,30 @@ async def execute_full_pipeline(file: UploadFile = File(...)):
                 img = cv2.cvtColor(img_data, cv2.COLOR_RGBA2BGR if pix.n == 4 else cv2.COLOR_RGB2BGR)
                 
                 raw_lines = run_ocr_on_cv2_image(img)
+                tables, cover_frames = detect_table_and_cover_regions_api(img)
                 structured_lines = process_layout_alignment(raw_lines, img.shape[1])
-                pages_extracted_data.append({"lines": structured_lines, "width": img.shape[1]})
+                pages_extracted_data.append({
+                    "lines": structured_lines,
+                    "tables": tables,
+                    "cover_frames": cover_frames,
+                    "width": img.shape[1]
+                })
             doc.close()
         else:
             img = cv2.imread(upload_path)
             if img is None:
                 raise HTTPException(status_code=400, detail="Không thể giải mã file ảnh.")
             raw_lines = run_ocr_on_cv2_image(img)
+            tables, cover_frames = detect_table_and_cover_regions_api(img)
             structured_lines = process_layout_alignment(raw_lines, img.shape[1])
-            pages_extracted_data.append({"lines": structured_lines, "width": img.shape[1]})
+            pages_extracted_data.append({
+                "lines": structured_lines,
+                "tables": tables,
+                "cover_frames": cover_frames,
+                "width": img.shape[1]
+            })
 
-        print(f">>> [API LOG] Kết xuất file Word Flow Native + Borderless Tables...")
+        print(f">>> [API LOG] Kết xuất file Word Flow Native + Đường Kẻ Bảng (Table Grid)...")
         create_docx_document(pages_extracted_data, output_docx_path)
         
         export_filename = f"OCR_{os.path.splitext(filename)[0]}.docx"

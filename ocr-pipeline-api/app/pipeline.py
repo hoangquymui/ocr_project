@@ -26,6 +26,56 @@ def remove_table_lines(binary):
     return cv2.subtract(binary, table_lines)
 
 
+def detect_table_and_cover_regions_api(img_bgr):
+    """ Phát hiện khu vực Bảng Biểu và Khung Bìa Trang từ ảnh BGR """
+    page_h, page_w = img_bgr.shape[:2]
+    gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 240, 255, cv2.THRESH_BINARY_INV)
+
+    kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (50, 1))
+    lines_h = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_h)
+
+    kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 50))
+    lines_v = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_v)
+
+    table_grid = cv2.add(lines_h, lines_v)
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 25))
+    table_mask = cv2.morphologyEx(table_grid, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+
+    contours, _ = cv2.findContours(table_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    tables = []
+    cover_frames = []
+
+    for idx, cnt in enumerate(contours, start=1):
+        x, y, w, h = cv2.boundingRect(cnt)
+        if w > page_w * 0.75 and h > page_h * 0.75:
+            cover_frames.append({
+                "frame_id": len(cover_frames) + 1,
+                "type": "cover_frame",
+                "bbox": {"x_min": float(x), "y_min": float(y), "x_max": float(x + w), "y_max": float(y + h)}
+            })
+        elif w >= 160 and h >= 60:
+            tables.append({
+                "table_id": len(tables) + 1,
+                "type": "table_region",
+                "bbox": {"x_min": float(x), "y_min": float(y), "x_max": float(x + w), "y_max": float(y + h)}
+            })
+    return tables, cover_frames
+
+
+def is_line_inside_table(line, tables):
+    if not tables:
+        return False
+    lb = line["bbox"]
+    l_cx = (lb["x_min"] + lb["x_max"]) / 2
+    l_cy = (lb["y_min"] + lb["y_max"]) / 2
+    for tbl in tables:
+        tb = tbl["bbox"]
+        if tb["x_min"] <= l_cx <= tb["x_max"] and tb["y_min"] <= l_cy <= tb["y_max"]:
+            return True
+    return False
+
+
 def process_layout_alignment(lines, width):
     if not lines:
         return []
@@ -75,7 +125,7 @@ def process_layout_alignment(lines, width):
 
 
 def set_table_borders_none(table):
-    """ Xóa toàn bộ viền bảng để tạo Bảng Ẩn (Invisible Table) """
+    """ Xóa toàn bộ viền bảng (Invisible Table cho văn bản 2 bên) """
     tblPr = table._tbl.tblPr
     for child in list(tblPr):
         if child.tag.endswith('tblBorders'):
@@ -89,6 +139,26 @@ def set_table_borders_none(table):
         '  <w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>\n'
         '  <w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/>\n'
         '  <w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/>\n'
+        '</w:tblBorders>'
+    )
+    tblPr.append(borders_xml)
+
+
+def set_table_borders_visible(table):
+    """ Thiết lập đường kẻ viền bảng hiển thị nét mảnh rõ ràng (Table Grid) """
+    tblPr = table._tbl.tblPr
+    for child in list(tblPr):
+        if child.tag.endswith('tblBorders'):
+            tblPr.remove(child)
+
+    borders_xml = parse_xml(
+        f'<w:tblBorders {nsdecls("w")}>\n'
+        '  <w:top w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '  <w:left w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '  <w:bottom w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '  <w:right w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '  <w:insideH w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
+        '  <w:insideV w:val="single" w:sz="4" w:space="0" w:color="000000"/>\n'
         '</w:tblBorders>'
     )
     tblPr.append(borders_xml)
@@ -118,6 +188,8 @@ def create_docx_document(pages_data, output_path):
         section.right_margin = Inches(0.75)
 
         lines = page.get("lines", [])
+        tables_in_page = page.get("tables", [])
+
         if not lines:
             continue
 
@@ -142,7 +214,9 @@ def create_docx_document(pages_data, output_path):
             grouped_rows.append(current_row)
 
         for row in grouped_rows:
-            if len(row) == 1:
+            is_table_row = any(is_line_inside_table(l, tables_in_page) for l in row)
+
+            if len(row) == 1 and not is_table_row:
                 line = row[0]
                 text = line.get("text", "").strip()
                 if not text:
@@ -170,7 +244,11 @@ def create_docx_document(pages_data, output_path):
 
                 table = doc.add_table(rows=1, cols=num_cols)
                 table.alignment = WD_TABLE_ALIGNMENT.CENTER
-                set_table_borders_none(table)
+
+                if is_table_row:
+                    set_table_borders_visible(table)
+                else:
+                    set_table_borders_none(table)
 
                 cell_width = Inches(6.7 / num_cols)
 
@@ -181,12 +259,12 @@ def create_docx_document(pages_data, output_path):
                     if text:
                         p = cell.paragraphs[0]
                         p.alignment = get_alignment_enum(line.get("alignment", "LEFT"))
-                        p.paragraph_format.space_before = Pt(0)
+                        p.paragraph_format.space_before = Pt(2)
                         p.paragraph_format.space_after = Pt(2)
                         
                         run = p.add_run(text)
                         run.font.name = "Times New Roman"
-                        run.font.size = Pt(11)
+                        run.font.size = Pt(10.5 if is_table_row else 11)
                         run.font.color.rgb = RGBColor(0, 0, 0)
 
         if idx < len(pages_data) - 1:
