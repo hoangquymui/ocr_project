@@ -11,34 +11,7 @@ from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml import parse_xml
 from docx.oxml.ns import nsdecls
 
-from vietocr.tool.predictor import Predictor
-from vietocr.tool.config import Cfg
-
-
-class VietOCRONNXPredictor:
-    def __init__(self, model_path=None):
-        self.config = Cfg.load_config_from_name("vgg_transformer")
-        self.config["device"] = "cpu"
-        self.config["predictor"]["beamsearch"] = False
-        self.base_predictor = Predictor(self.config)
-        
-        jit_pt_path = os.path.join(os.path.dirname(__file__), "..", "..", "python", "models", "vietocr_vgg_cnn.pt")
-        if os.path.exists(jit_pt_path):
-            try:
-                self.base_predictor.model.cnn = torch.jit.load(jit_pt_path)
-                print(f"⚡ [API C++ JIT] Nạp mô hình C++ JIT từ: {jit_pt_path}")
-            except Exception:
-                pass
-
-    def predict(self, img_pil):
-        return self.base_predictor.predict(img_pil)
-
-    def predict_batch(self, list_pil_imgs, batch_size=32):
-        results = []
-        for i in range(0, len(list_pil_imgs), batch_size):
-            batch = list_pil_imgs[i:i + batch_size]
-            results.extend([self.base_predictor.predict(img) for img in batch])
-        return results
+from app.vietocr_onnx_engine import VietOCRONNXPredictor
 
 
 def remove_table_lines(binary):
