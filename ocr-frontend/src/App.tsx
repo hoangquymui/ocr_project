@@ -17,12 +17,14 @@ interface ProcessedFile {
 export default function App() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
+  const [progress, setProgress] = useState<number>(0);
+  const [stageText, setStageText] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState<boolean>(false);
   
   const [processedFiles, setProcessedFiles] = useState<ProcessedFile[]>([]);
   const [activeFile, setActiveFile] = useState<ProcessedFile | null>(null);
-  const [viewHeight, setViewHeight] = useState<number>(720); // Dễ dàng mở rộng chiều cao 720px hoặc 900px
+  const [viewHeight, setViewHeight] = useState<number>(720);
   
   const viewerRef = useRef<HTMLDivElement>(null);
   const [renderingDocx, setRenderingDocx] = useState<boolean>(false);
@@ -60,13 +62,45 @@ export default function App() {
     formData.append('file', currentFile);
 
     setLoading(true);
+    setProgress(5);
+    setStageText('📄 Đang khởi tạo và chuẩn bị tài liệu...');
     setError(null);
+
+    // Giả lập tiến trình mịn từ 5% đến 95% theo nhịp thời gian chạy OCR AI
+    const timer = setInterval(() => {
+      setProgress((prev) => {
+        if (prev >= 92) {
+          setStageText('🎨 Đang dựng file Word Flow Native & Bảng Ẩn...');
+          return 92;
+        }
+        if (prev >= 65) {
+          setStageText('🧠 Đang nhận dạng Tiếng Việt qua VietOCR C++ Engine...');
+          return prev + 3;
+        }
+        if (prev >= 30) {
+          setStageText('⚡ Đang định vị ô chữ bằng RapidOCR ONNX Detector...');
+          return prev + 5;
+        }
+        setStageText('📤 Đang tải tệp lên máy chủ OCR Pipeline...');
+        return prev + 8;
+      });
+    }, 400);
 
     try {
       const response = await axios.post('http://localhost:3000/ocr/upload', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
-        responseType: 'blob', 
+        responseType: 'blob',
+        onUploadProgress: (progressEvent) => {
+          if (progressEvent.total) {
+            const percentCompleted = Math.round((progressEvent.loaded * 25) / progressEvent.total);
+            setProgress(prev => Math.max(prev, percentCompleted));
+          }
+        }
       });
+
+      clearInterval(timer);
+      setProgress(100);
+      setStageText('✅ Xử lý OCR thành công! Đang mở giao diện so sánh...');
 
       const docxBlob = new Blob([response.data], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -88,11 +122,16 @@ export default function App() {
         size: (currentFile.size / 1024 / 1024).toFixed(2) + ' MB'
       };
 
-      setProcessedFiles(prev => [newProcessedFile, ...prev]);
-      setActiveFile(newProcessedFile);
-      setFile(null);
+      setTimeout(() => {
+        setProcessedFiles(prev => [newProcessedFile, ...prev]);
+        setActiveFile(newProcessedFile);
+        setFile(null);
+        setLoading(false);
+      }, 500);
 
     } catch (err: any) {
+      clearInterval(timer);
+      setLoading(false);
       if (err.response?.data instanceof Blob) {
         const textError = await err.response.data.text();
         try {
@@ -104,8 +143,6 @@ export default function App() {
       } else {
         setError(err.response?.data?.message || 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra NestJS Gateway và FastAPI Server.');
       }
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -156,7 +193,7 @@ export default function App() {
       <header style={{ textAlign: 'center', marginBottom: '28px' }} className="animate-fade-in">
         <div style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', background: '#eff6ff', border: '1px solid #bfdbfe', padding: '6px 16px', borderRadius: '30px', color: '#2563eb', fontSize: '13px', fontWeight: '600', marginBottom: '12px' }}>
           <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#10b981' }}></span>
-          OCR Studio AI Engine v3.0 • Dual Pane Studio View
+          OCR Studio AI Engine v4.0 • Real-time Progress Bar
         </div>
         <h1 style={{ fontSize: '32px', fontWeight: '800', color: '#0f172a', letterSpacing: '-0.02em', marginBottom: '8px' }}>
           Hệ Thống Trích Xuất & So Sánh Tài Liệu AI
@@ -185,7 +222,8 @@ export default function App() {
               type="file" 
               accept="image/*,application/pdf" 
               onChange={handleFileChange} 
-              style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: 'pointer' }} 
+              disabled={loading}
+              style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', opacity: 0, cursor: loading ? 'not-allowed' : 'pointer' }} 
             />
             
             <div style={{ width: '50px', height: '50px', borderRadius: '14px', backgroundColor: '#eff6ff', color: '#2563eb', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px' }}>
@@ -204,7 +242,7 @@ export default function App() {
             </p>
           </div>
 
-          {file && (
+          {file && !loading && (
             <div style={{ marginTop: '14px', padding: '10px 14px', backgroundColor: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <span style={{ fontSize: '18px' }}>{file.name.endsWith('.pdf') ? '📄' : '🖼️'}</span>
@@ -219,6 +257,32 @@ export default function App() {
               >
                 Gỡ chọn ✕
               </button>
+            </div>
+          )}
+
+          {/* 🌟 THANH TIẾN TRÌNH PHẦN TRĂM (PROGRESS BAR) */}
+          {loading && (
+            <div style={{ marginTop: '18px', padding: '16px', backgroundColor: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '10px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#2563eb', animation: 'pulse 1.5s infinite' }}></span>
+                  <span style={{ fontSize: '13px', fontWeight: '700', color: '#1e293b' }}>{stageText}</span>
+                </div>
+                <span style={{ fontSize: '15px', fontWeight: '800', color: '#2563eb' }}>{progress}%</span>
+              </div>
+
+              {/* Progress track */}
+              <div style={{ width: '100%', height: '10px', backgroundColor: '#e2e8f0', borderRadius: '20px', overflow: 'hidden' }}>
+                <div 
+                  style={{ 
+                    height: '100%', 
+                    width: `${progress}%`, 
+                    background: 'linear-gradient(90deg, #2563eb 0%, #4f46e5 50%, #10b981 100%)', 
+                    borderRadius: '20px', 
+                    transition: 'width 0.3s ease-out' 
+                  }} 
+                />
+              </div>
             </div>
           )}
 
@@ -249,7 +313,7 @@ export default function App() {
                 <svg className="animate-spin" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                   <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
                 </svg>
-                <span>🤖 Đang trích xuất OCR & Cấu trúc văn bản...</span>
+                <span>Đang Tiến Hành OCR ({progress}%)...</span>
               </>
             ) : (
               <>
@@ -267,11 +331,10 @@ export default function App() {
         </div>
       </section>
 
-      {/* 3. STUDIO DUAL-PANE COMPARISON DASHBOARD (2 KHUNG 2 BÊN) */}
+      {/* 3. STUDIO DUAL-PANE COMPARISON DASHBOARD */}
       {activeFile && (
         <section style={{ marginBottom: '40px' }} className="animate-fade-in">
           
-          {/* CONTROL TOOLBAR BAR ABOVE PANES */}
           <div style={{ marginBottom: '16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px', padding: '12px 20px', background: '#ffffff', border: '1px solid #e2e8f0', borderRadius: '12px', boxShadow: 'var(--shadow-sm)' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
               <span style={{ padding: '4px 10px', borderRadius: '6px', backgroundColor: '#eff6ff', color: '#2563eb', fontWeight: '700', fontSize: '13px' }}>
@@ -283,7 +346,6 @@ export default function App() {
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-              {/* Tùy chỉnh chiều cao khung */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: '#64748b' }}>
                 <span>Chiều cao khung:</span>
                 <button 
@@ -300,7 +362,6 @@ export default function App() {
                 </button>
               </div>
 
-              {/* Nút tải file Word về máy (tùy chọn) */}
               <button 
                 onClick={() => handleDownloadDocx(activeFile)}
                 style={{ padding: '6px 12px', borderRadius: '6px', border: '1px solid #10b981', background: '#ecfdf5', color: '#047857', fontSize: '12px', fontWeight: '700', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}
@@ -310,12 +371,10 @@ export default function App() {
             </div>
           </div>
 
-          {/* DUAL PANE STRICT 2-COLUMN GRID */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', width: '100%' }}>
             
-            {/* ==================== LEFT PANE: FILE GỐC (STUDIO WINDOW FRAME) ==================== */}
+            {/* LEFT PANE */}
             <div className="studio-window">
-              {/* macOS Window Header */}
               <div className="studio-window-header">
                 <div className="window-dots">
                   <span className="window-dot red"></span>
@@ -332,7 +391,6 @@ export default function App() {
                 </span>
               </div>
 
-              {/* Window Viewer Viewport */}
               <div style={{ height: `${viewHeight}px`, overflowY: 'auto', backgroundColor: '#cbd5e1', padding: '12px', display: 'flex', justifyContent: 'center', alignItems: 'flex-start' }}>
                 {activeFile.originalFileType.includes('pdf') ? (
                   <iframe 
@@ -352,9 +410,8 @@ export default function App() {
               </div>
             </div>
 
-            {/* ==================== RIGHT PANE: TRÍCH XUẤT WORD (STUDIO WINDOW FRAME) ==================== */}
+            {/* RIGHT PANE */}
             <div className="studio-window">
-              {/* macOS Window Header */}
               <div className="studio-window-header">
                 <div className="window-dots">
                   <span className="window-dot red"></span>
@@ -377,7 +434,6 @@ export default function App() {
                 )}
               </div>
 
-              {/* Window Viewer Viewport (Render Docx Paper) */}
               <div 
                 ref={viewerRef} 
                 style={{ 

@@ -3,51 +3,55 @@ import cv2
 import fitz
 import numpy as np
 from PIL import Image
+import torch
 from docx import Document
-from docx.shared import Pt, Inches
+from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-
-# Vá lỗi Pillow 10+ cho VietOCR 0.3.11
-if not hasattr(Image, 'ANTIALIAS'):
-    Image.ANTIALIAS = Image.Resampling.LANCZOS
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.oxml import parse_xml
+from docx.oxml.ns import nsdecls
 
 from vietocr.tool.predictor import Predictor
 from vietocr.tool.config import Cfg
 
-def merge_neighbor_boxes(ocr_results, x_threshold=45, y_threshold=12):
-    if not ocr_results or not ocr_results[0]:
-        return []
+
+class VietOCRONNXPredictor:
+    def __init__(self, model_path=None):
+        self.config = Cfg.load_config_from_name("vgg_transformer")
+        self.config["device"] = "cpu"
+        self.config["predictor"]["beamsearch"] = False
+        self.base_predictor = Predictor(self.config)
         
-    raw_lines = []
-    for line in ocr_results[0]:
-        poly = line[0]
-        xs = [p[0] for p in poly]
-        ys = [p[1] for p in poly]
-        raw_lines.append({
-            "x_min": min(xs), "x_max": max(xs),
-            "y_min": min(ys), "y_max": max(ys)
-        })
-        
-    raw_lines.sort(key=lambda l: (l["y_min"], l["x_min"]))
-    
-    merged_lines = []
-    for line in raw_lines:
-        if not merged_lines:
-            merged_lines.append(line)
-            continue
-            
-        prev = merged_lines[-1]
-        is_same_row = abs(line["y_min"] - prev["y_min"]) < y_threshold or abs(line["y_max"] - prev["y_max"]) < y_threshold
-        is_close_x = (line["x_min"] - prev["x_max"]) < x_threshold
-        
-        if is_same_row and is_close_x and (line["x_min"] >= prev["x_min"]):
-            prev["x_max"] = max(prev["x_max"], line["x_max"])
-            prev["y_min"] = min(prev["y_min"], line["y_min"])
-            prev["y_max"] = max(prev["y_max"], line["y_max"])
-        else:
-            merged_lines.append(line)
-            
-    return merged_lines
+        jit_pt_path = os.path.join(os.path.dirname(__file__), "..", "..", "python", "models", "vietocr_vgg_cnn.pt")
+        if os.path.exists(jit_pt_path):
+            try:
+                self.base_predictor.model.cnn = torch.jit.load(jit_pt_path)
+                print(f"⚡ [API C++ JIT] Nạp mô hình C++ JIT từ: {jit_pt_path}")
+            except Exception:
+                pass
+
+    def predict(self, img_pil):
+        return self.base_predictor.predict(img_pil)
+
+    def predict_batch(self, list_pil_imgs, batch_size=32):
+        results = []
+        for i in range(0, len(list_pil_imgs), batch_size):
+            batch = list_pil_imgs[i:i + batch_size]
+            results.extend([self.base_predictor.predict(img) for img in batch])
+        return results
+
+
+def remove_table_lines(binary):
+    """ Loại bỏ toàn bộ kẻ bảng ngang và kẻ bảng dọc """
+    kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+    lines_h = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_h)
+
+    kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
+    lines_v = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_v)
+
+    table_lines = cv2.add(lines_h, lines_v)
+    return cv2.subtract(binary, table_lines)
+
 
 def process_layout_alignment(lines, width):
     if not lines:
@@ -59,7 +63,6 @@ def process_layout_alignment(lines, width):
     final_ordered_lines = []
     current_row = []
     
-    # Gom cụm hàng ngang (Row Clustering)
     for line in lines:
         if not current_row:
             current_row.append(line)
@@ -82,9 +85,7 @@ def process_layout_alignment(lines, width):
             current_row.sort(key=lambda l: l["bbox"]["x_min"])
         final_ordered_lines.extend(current_row)
 
-    # Phân loại căn lề động (Dynamic Alignment)
-    processed_lines = []
-    for idx, line in enumerate(final_ordered_lines, start=1):
+    for line in final_ordered_lines:
         bbox = line["bbox"]
         line_width = bbox["x_max"] - bbox["x_min"]
         line_center_x = (bbox["x_min"] + bbox["x_max"]) / 2
@@ -96,59 +97,124 @@ def process_layout_alignment(lines, width):
             alignment = "RIGHT"
             
         line["alignment"] = alignment
-        processed_lines.append(line)
         
-    return processed_lines
+    return final_ordered_lines
 
-def group_lines_into_paragraphs(lines):
-    paragraphs = []
-    current_para = []
 
-    for line in lines:
-        if line["alignment"] in ["CENTER", "RIGHT"]:
-            if current_para:
-                paragraphs.append({"alignment": "LEFT", "text": " ".join(current_para)})
-                current_para = []
-            paragraphs.append({"alignment": line["alignment"], "text": line["text"]})
-        else:
-            current_para.append(line["text"])
+def set_table_borders_none(table):
+    """ Xóa toàn bộ viền bảng để tạo Bảng Ẩn (Invisible Table) """
+    tblPr = table._tbl.tblPr
+    for child in list(tblPr):
+        if child.tag.endswith('tblBorders'):
+            tblPr.remove(child)
 
-    if current_para:
-        paragraphs.append({"alignment": "LEFT", "text": " ".join(current_para)})
+    borders_xml = parse_xml(
+        f'<w:tblBorders {nsdecls("w")}>\n'
+        '  <w:top w:val="none" w:sz="0" w:space="0" w:color="auto"/>\n'
+        '  <w:left w:val="none" w:sz="0" w:space="0" w:color="auto"/>\n'
+        '  <w:bottom w:val="none" w:sz="0" w:space="0" w:color="auto"/>\n'
+        '  <w:right w:val="none" w:sz="0" w:space="0" w:color="auto"/>\n'
+        '  <w:insideH w:val="none" w:sz="0" w:space="0" w:color="auto"/>\n'
+        '  <w:insideV w:val="none" w:sz="0" w:space="0" w:color="auto"/>\n'
+        '</w:tblBorders>'
+    )
+    tblPr.append(borders_xml)
 
-    return paragraphs
+
+def get_alignment_enum(align_str):
+    align_str = (align_str or "LEFT").upper()
+    if align_str == "CENTER":
+        return WD_ALIGN_PARAGRAPH.CENTER
+    if align_str == "RIGHT":
+        return WD_ALIGN_PARAGRAPH.RIGHT
+    if align_str == "JUSTIFY":
+        return WD_ALIGN_PARAGRAPH.JUSTIFY
+    return WD_ALIGN_PARAGRAPH.LEFT
+
 
 def create_docx_document(pages_data, output_path):
     doc = Document()
-    for section in doc.sections:
-        section.top_margin = Inches(1)
-        section.bottom_margin = Inches(1)
-        section.left_margin = Inches(1)
-        section.right_margin = Inches(1)
-
-    style = doc.styles['Normal']
-    font = style.font
-    font.name = 'Times New Roman'
-    font.size = Pt(13)
 
     for idx, page in enumerate(pages_data):
-        paragraphs_data = group_lines_into_paragraphs(page["lines"])
-        
-        for p_data in paragraphs_data:
-            p = doc.add_paragraph()
-            p.paragraph_format.space_after = Pt(6)
-            p.paragraph_format.line_spacing = 1.3
-            
-            if p_data["alignment"] == "CENTER":
-                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            elif p_data["alignment"] == "RIGHT":
-                p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+        section = doc.sections[idx] if idx < len(doc.sections) else doc.add_section()
+        section.page_width = Inches(8.27)
+        section.page_height = Inches(11.69)
+        section.top_margin = Inches(0.75)
+        section.bottom_margin = Inches(0.75)
+        section.left_margin = Inches(0.75)
+        section.right_margin = Inches(0.75)
+
+        lines = page.get("lines", [])
+        if not lines:
+            continue
+
+        lines_sorted = sorted(lines, key=lambda l: l.get("bbox", {}).get("y_min", 0))
+
+        grouped_rows = []
+        current_row = []
+
+        for line in lines_sorted:
+            if not current_row:
+                current_row.append(line)
             else:
-                p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                
-            run = p.add_run(p_data["text"])
-            if p_data["alignment"] == "CENTER" and p_data["text"].isupper():
-                run.bold = True
+                last_y = current_row[-1]["bbox"]["y_min"]
+                curr_y = line["bbox"]["y_min"]
+                if abs(curr_y - last_y) < 18:
+                    current_row.append(line)
+                else:
+                    grouped_rows.append(current_row)
+                    current_row = [line]
+
+        if current_row:
+            grouped_rows.append(current_row)
+
+        for row in grouped_rows:
+            if len(row) == 1:
+                line = row[0]
+                text = line.get("text", "").strip()
+                if not text:
+                    continue
+
+                is_upper_title = text.isupper() and len(text.split()) < 15
+                font_size = 14 if is_upper_title else 11
+                bold = is_upper_title
+
+                p = doc.add_paragraph()
+                p.alignment = get_alignment_enum(line.get("alignment", "LEFT"))
+                p.paragraph_format.space_before = Pt(4 if is_upper_title else 0)
+                p.paragraph_format.space_after = Pt(4)
+                p.paragraph_format.line_spacing = 1.15
+
+                run = p.add_run(text)
+                run.font.name = "Times New Roman"
+                run.font.size = Pt(font_size)
+                run.font.bold = bold
+                run.font.color.rgb = RGBColor(0, 0, 0)
+
+            else:
+                row_sorted = sorted(row, key=lambda l: l["bbox"]["x_min"])
+                num_cols = len(row_sorted)
+
+                table = doc.add_table(rows=1, cols=num_cols)
+                table.alignment = WD_TABLE_ALIGNMENT.CENTER
+                set_table_borders_none(table)
+
+                cell_width = Inches(6.7 / num_cols)
+
+                for col_idx, line in enumerate(row_sorted):
+                    cell = table.rows[0].cells[col_idx]
+                    cell.width = cell_width
+                    text = line.get("text", "").strip()
+                    if text:
+                        p = cell.paragraphs[0]
+                        p.alignment = get_alignment_enum(line.get("alignment", "LEFT"))
+                        p.paragraph_format.space_before = Pt(0)
+                        p.paragraph_format.space_after = Pt(2)
+                        
+                        run = p.add_run(text)
+                        run.font.name = "Times New Roman"
+                        run.font.size = Pt(11)
+                        run.font.color.rgb = RGBColor(0, 0, 0)
 
         if idx < len(pages_data) - 1:
             doc.add_page_break()

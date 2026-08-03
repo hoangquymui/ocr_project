@@ -1,5 +1,4 @@
 import collections
-# Tự vá lỗi cấu trúc Mapping bị thiếu trên Python mới cho thư viện attrdict của PaddleOCR
 if not hasattr(collections, 'Mapping'):
     import collections.abc
     collections.Mapping = collections.abc.Mapping
@@ -12,58 +11,80 @@ import fitz
 import numpy as np
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import FileResponse
-from paddleocr import PaddleOCR
 from PIL import Image
+from rapidocr_onnxruntime import RapidOCR
 
-from vietocr.tool.predictor import Predictor
-from vietocr.tool.config import Cfg
-from app.pipeline import merge_neighbor_boxes, process_layout_alignment, create_docx_document
+from app.pipeline import VietOCRONNXPredictor, process_layout_alignment, create_docx_document
 
-app = FastAPI(title="End-to-End Pipeline OCR API", version="3.0")
+app = FastAPI(title="End-to-End Pipeline OCR API", version="4.0")
 
 TEMP_DIR = "/tmp/ocr_pipeline"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-from rapidocr_onnxruntime import RapidOCR
-
 # --- KHỞI TẠO MODEL LÚC BẬT DỊCH VỤ ---
-print(">>> [AI LOG] Khởi tạo RapidOCR ONNX Runtime Engine (Siêu Tốc CPU)...")
+print(">>> [API LOG] Khởi tạo RapidOCR ONNX Runtime Engine (Detector)...")
 rapid_engine = RapidOCR()
+
+print(">>> [API LOG] Khởi tạo VietOCR Predictor (Recognizer)...")
+vietocr_engine = VietOCRONNXPredictor()
+
+
+def crop_polygon_to_pil(image_bgr, poly, padding=6):
+    xs = [p[0] for p in poly]
+    ys = [p[1] for p in poly]
+    x_min = max(0, int(min(xs)) - padding)
+    y_min = max(0, int(min(ys)) - padding)
+    x_max = min(image_bgr.shape[1], int(max(xs)) + padding)
+    y_max = min(image_bgr.shape[0], int(max(ys)) + padding)
+
+    crop = image_bgr[y_min:y_max, x_min:x_max]
+    if crop.size == 0:
+        return None
+    return Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB))
 
 
 def run_ocr_on_cv2_image(img):
-    """ Quy trình nhận dạng chữ siêu tốc bằng RapidOCR ONNX Engine """
-    result, elapse = rapid_engine(img)
+    """ RapidOCR ONNX Detector + VietOCR Recognizer """
+    result, _ = rapid_engine(img)
     lines_output = []
 
     if not result:
         return lines_output
 
+    crops = []
+    line_metas = []
+
     for item in result:
-        if not item or len(item) < 3:
+        if not item or len(item) < 1:
             continue
 
         poly = item[0]
-        text = item[1].strip() if item[1] else ""
-
         xs = [p[0] for p in poly]
         ys = [p[1] for p in poly]
 
-        lines_output.append({
-            "text": text,
-            "bbox": {
-                "x_min": float(min(xs)),
-                "y_min": float(min(ys)),
-                "x_max": float(max(xs)),
-                "y_max": float(max(ys))
-            }
-        })
+        crop_pil = crop_polygon_to_pil(img, poly, padding=6)
+        if crop_pil is not None:
+            crops.append(crop_pil)
+            line_metas.append({
+                "bbox": {
+                    "x_min": float(min(xs)),
+                    "y_min": float(min(ys)),
+                    "x_max": float(max(xs)),
+                    "y_max": float(max(ys))
+                }
+            })
+
+    if crops:
+        recognized_texts = vietocr_engine.predict_batch(crops, batch_size=32)
+        for meta, text in zip(line_metas, recognized_texts):
+            meta["text"] = text.strip() if text else ""
+            lines_output.append(meta)
 
     return lines_output
 
+
 @app.post("/api/v1/pipeline/ocr")
 async def execute_full_pipeline(file: UploadFile = File(...)):
-    print(">>> [API LOG] Endpoint nhận diện và tự động trả về file Word (.docx) hoàn chỉnh """)
     filename = file.filename
     ext = os.path.splitext(filename)[1].lower()
     
@@ -76,14 +97,11 @@ async def execute_full_pipeline(file: UploadFile = File(...)):
     
     try:
         print(f">>> [API LOG] Nhận file từ Client: {filename} (Định dạng: {ext})")
-        # 1. Ghi file tạm nhận được từ Client
         with open(upload_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
         pages_extracted_data = []
 
-        print(f">>> [API LOG] Tiến hành xử lý OCR và dựng cấu trúc dữ liệu từ file {filename}...")
-        # 2. Rẽ nhánh tiền xử lý dữ liệu dựa trên định dạng đầu vào
         if ext == '.pdf':
             doc = fitz.open(upload_path)
             for page_idx in range(len(doc)):
@@ -104,13 +122,10 @@ async def execute_full_pipeline(file: UploadFile = File(...)):
             structured_lines = process_layout_alignment(raw_lines, img.shape[1])
             pages_extracted_data.append({"lines": structured_lines, "width": img.shape[1]})
 
-        # 3. Dựng cấu trúc và kết xuất file Word
-        print(f">>> [API LOG] Tiến hành dựng cấu trúc và kết xuất file Word từ dữ liệu đã xử lý...")
+        print(f">>> [API LOG] Kết xuất file Word Flow Native + Borderless Tables...")
         create_docx_document(pages_extracted_data, output_docx_path)
         
-        # 4. Trả file Word về cho Client tải trực tiếp
         export_filename = f"OCR_{os.path.splitext(filename)[0]}.docx"
-        print(f">>> [API LOG] Trả file Word về cho Client: {export_filename}")
         return FileResponse(
             path=output_docx_path, 
             filename=export_filename,
@@ -121,6 +136,5 @@ async def execute_full_pipeline(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=f"Lỗi hệ thống trong quá trình OCR: {str(e)}")
         
     finally:
-        # Giải phóng dung lượng ổ cứng - Xóa bỏ các tệp tin tạm sau khi xử lý xong
         if os.path.exists(upload_path):
             os.remove(upload_path)
