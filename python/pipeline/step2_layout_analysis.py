@@ -1,5 +1,6 @@
 import os
 import cv2
+import numpy as np
 
 from config import IMAGES_DIR, DEBUG_DIR
 from document import load_document, save_document
@@ -150,6 +151,22 @@ def remove_border_regions(binary, page):
     return binary
 
 
+def remove_table_lines(binary):
+    """ Loại bỏ toàn bộ kẻ bảng ngang và kẻ bảng dọc """
+    # Tìm các đường kẻ ngang dài (> 40px)
+    kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+    lines_h = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_h)
+
+    # Tìm các đường kẻ dọc dài (> 40px)
+    kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 40))
+    lines_v = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel_v)
+
+    # Xóa toàn bộ đường kẻ ngang & dọc khỏi ảnh nhị phân
+    table_lines = cv2.add(lines_h, lines_v)
+    binary = cv2.subtract(binary, table_lines)
+    return binary
+
+
 def detect_image_regions(page):
     ensure_dirs(IMAGES_DIR)
 
@@ -166,35 +183,46 @@ def detect_image_regions(page):
 
     binary = remove_text_regions(binary, page, padding=12)
     binary = remove_border_regions(binary, page)
+    binary = remove_table_lines(binary)
 
-    # Gom các nét đen của logo/hình lại thành vùng lớn
+    # Gom các nét đen của logo/hình thực sự thành vùng lớn
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
     binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel, iterations=2)
 
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     images = []
+    lines_in_page = page.get("lines", [])
 
     for idx, cnt in enumerate(contours, start=1):
         x, y, w, h = cv2.boundingRect(cnt)
         area = w * h
 
-        if area < 6000:
+        # Loại bỏ các vết nhiễu hoặc đường viền mỏng nhỏ
+        if area < 8000:
             continue
 
-        if w < 60 or h < 60:
+        if w < 70 or h < 70:
             continue
 
-        # Bỏ vùng quá rộng/dài, thường là nhiễu/viền
+        # Loại bỏ mảnh đường kẻ ngang/dọc sót lại (Aspect Ratio quá lệch)
+        aspect_ratio = w / float(h)
+        if aspect_ratio > 4.5 or aspect_ratio < 0.22:
+            continue
+
+        # Loại bỏ các vùng nằm sát viền hoặc chiếm hầu hết chiều rộng trang
         if w > page["width"] * 0.7 or h > page["height"] * 0.6:
             continue
 
-        # Ưu tiên hình/logo nằm giữa trang hoặc nửa trên trang
-        center_x = x + w / 2
-        if y > page["height"] * 0.65:
-            continue
+        # Lọc bỏ các vùng chứa nhiều hơn 1 dòng văn bản (bảng chứa chữ)
+        overlapping_text_lines = 0
+        for l in lines_in_page:
+            lb = l["bbox"]
+            # Kiểm tra xem dòng chữ có nằm trong bounding box này không
+            if not (lb["x_max"] < x or lb["x_min"] > x + w or lb["y_max"] < y or lb["y_min"] > y + h):
+                overlapping_text_lines += 1
 
-        if abs(center_x - page["width"] / 2) > page["width"] * 0.35:
+        if overlapping_text_lines >= 2:
             continue
 
         pad = 8
@@ -204,6 +232,12 @@ def detect_image_regions(page):
         y2 = min(img.shape[0], y + h + pad)
 
         crop = img[y1:y2, x1:x2]
+
+        # Kiểm tra độ lệch chuẩn màu sắc (Ảnh/Logo thật có màu sắc đa dạng)
+        crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        std_dev = np.std(crop_gray)
+        if std_dev < 18:  # Nếu vùng bị phẳng màu (khung ô trắng), bỏ qua
+            continue
 
         crop_path = os.path.join(
             IMAGES_DIR,

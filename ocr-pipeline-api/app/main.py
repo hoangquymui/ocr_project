@@ -24,44 +24,41 @@ app = FastAPI(title="End-to-End Pipeline OCR API", version="3.0")
 TEMP_DIR = "/tmp/ocr_pipeline"
 os.makedirs(TEMP_DIR, exist_ok=True)
 
-# --- KHỞI TẠO MODEL LÚC BẬT DỊCH VỤ ---
-print(">>> [AI LOG] Khởi tạo mô hình định vị biên chữ (PaddleOCR Detector)...")
-ocr_det = PaddleOCR(
-    lang="vi", det=True, rec=False, show_log=False, use_gpu=False,
-    det_db_thresh=0.25, det_db_box_thresh=0.55, det_db_unclip_ratio=1.4
-)
+from rapidocr_onnxruntime import RapidOCR
 
-print(">>> [AI LOG] Khởi tạo mô hình nhận dạng chữ quốc ngữ (VietOCR Predictor)...")
-config = Cfg.load_config_from_name('vgg_transformer')
-config['predictor']['beamsearch'] = False
-config['device'] = 'cpu'
-detector = Predictor(config)
+# --- KHỞI TẠO MODEL LÚC BẬT DỊCH VỤ ---
+print(">>> [AI LOG] Khởi tạo RapidOCR ONNX Runtime Engine (Siêu Tốc CPU)...")
+rapid_engine = RapidOCR()
+
 
 def run_ocr_on_cv2_image(img):
-    """ Quy trình xử lý nhận dạng chữ trên ảnh đơn lẻ """
-    raw_result = ocr_det.ocr(img, cls=False)
-    optimized_lines = merge_neighbor_boxes(raw_result)
-    
+    """ Quy trình nhận dạng chữ siêu tốc bằng RapidOCR ONNX Engine """
+    result, elapse = rapid_engine(img)
     lines_output = []
-    for line in optimized_lines:
-        x_min, y_min = max(0, int(line["x_min"])), max(0, int(line["y_min"]))
-        x_max, y_max = min(img.shape[1], int(line["x_max"])), min(img.shape[0], int(line["y_max"]))
 
-        pad_y = 2
-        crop_y_min = max(0, y_min - pad_y)
-        crop_y_max = min(img.shape[0], y_max + pad_y)
-        
-        cropped_img = img[crop_y_min:crop_y_max, x_min:x_max]
-        if cropped_img.size > 0:
-            cropped_pil = Image.fromarray(cv2.cvtColor(cropped_img, cv2.COLOR_BGR2RGB))
-            text = detector.predict(cropped_pil).strip()
-        else:
-            text = ""
+    if not result:
+        return lines_output
+
+    for item in result:
+        if not item or len(item) < 3:
+            continue
+
+        poly = item[0]
+        text = item[1].strip() if item[1] else ""
+
+        xs = [p[0] for p in poly]
+        ys = [p[1] for p in poly]
 
         lines_output.append({
             "text": text,
-            "bbox": {"x_min": x_min, "y_min": y_min, "x_max": x_max, "y_max": y_max}
+            "bbox": {
+                "x_min": float(min(xs)),
+                "y_min": float(min(ys)),
+                "x_max": float(max(xs)),
+                "y_max": float(max(ys))
+            }
         })
+
     return lines_output
 
 @app.post("/api/v1/pipeline/ocr")

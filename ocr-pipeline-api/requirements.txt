@@ -7,6 +7,7 @@ python-multipart==0.0.9
 numpy==1.26.4
 paddlepaddle==2.6.2
 paddleocr==2.7.3
+rapidocr_onnxruntime
 
 # Cập nhật cụm Torch và Torchvision bản nhẹ (CPU-only) cho VietOCR
 torch==2.2.2 --extra-index-url https://download.pytorch.org/whl/cpu
