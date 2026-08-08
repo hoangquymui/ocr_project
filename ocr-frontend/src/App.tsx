@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { renderAsync } from 'docx-preview';
 
+
 interface ProcessedFile {
   id: string;
   originalName: string;
@@ -12,6 +13,21 @@ interface ProcessedFile {
   originalUrl: string;
   timestamp: string;
   size: string;
+}
+
+function DocxRenderer({ blob }: { blob: Blob }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (containerRef.current && blob) {
+      containerRef.current.innerHTML = '';
+      renderAsync(blob, containerRef.current).catch((err) => {
+        console.error('Lỗi khi hiển thị file docx:', err);
+      });
+    }
+  }, [blob]);
+
+  return <div ref={containerRef} style={{ padding: '16px', background: '#ffffff', minHeight: '100%', boxSizing: 'border-box' }} />;
 }
 
 export default function App() {
@@ -25,9 +41,6 @@ export default function App() {
   const [processedFiles, setProcessedFiles] = useState<ProcessedFile[]>([]);
   const [activeFile, setActiveFile] = useState<ProcessedFile | null>(null);
   const [viewHeight, setViewHeight] = useState<number>(720);
-
-  const viewerRef = useRef<HTMLDivElement>(null);
-  const [renderingDocx, setRenderingDocx] = useState<boolean>(false);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -57,76 +70,69 @@ export default function App() {
       return;
     }
 
-    const currentFile = file;
-    const formData = new FormData();
-    formData.append('file', currentFile);
-
     setLoading(true);
-    setProgress(5);
-    setStageText('📄 Đang khởi tạo và chuẩn bị tài liệu...');
     setError(null);
+    setProgress(5);
+    setStageText('Đang tải tệp lên máy chủ gateway...');
 
-    // Giả lập tiến trình mịn từ 5% đến 95% theo nhịp thời gian chạy OCR AI
     const timer = setInterval(() => {
       setProgress((prev) => {
-        if (prev >= 92) {
-          setStageText('🎨 Đang dựng file Word Flow Native & Bảng Ẩn...');
-          return 92;
-        }
-        if (prev >= 65) {
-          setStageText('🧠 Đang nhận dạng Tiếng Việt qua VietOCR C++ Engine...');
-          return prev + 3;
-        }
-        if (prev >= 30) {
-          setStageText('⚡ Đang định vị ô chữ bằng RapidOCR ONNX Detector...');
+        if (prev < 30) {
+          setStageText('Đang thực thi Bước 1: RapidOCR + VietOCR C++ Engine...');
           return prev + 5;
+        } else if (prev < 65) {
+          setStageText('Đang thực thi Bước 2: Phân tích bố cục, Bảng & Khung Bìa...');
+          return prev + 4;
+        } else if (prev < 88) {
+          setStageText('Đang thực thi Bước 3 & 4: Reading Order & Kẻ Bảng DOCX...');
+          return prev + 3;
+        } else if (prev < 98) {
+          setStageText('Đang hoàn thiện file Word...');
+          return prev + 1;
         }
-        setStageText('📤 Đang tải tệp lên máy chủ OCR Pipeline...');
-        return prev + 8;
+        return prev;
       });
-    }, 400);
+    }, 450);
+
+    const formData = new FormData();
+    formData.append('file', file);
 
     try {
       const response = await axios.post('http://localhost:3000/ocr/upload', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
         responseType: 'blob',
-        onUploadProgress: (progressEvent) => {
-          if (progressEvent.total) {
-            const percentCompleted = Math.round((progressEvent.loaded * 25) / progressEvent.total);
-            setProgress(prev => Math.max(prev, percentCompleted));
-          }
-        }
+        headers: { 'Content-Type': 'multipart/form-data' },
       });
 
       clearInterval(timer);
       setProgress(100);
-      setStageText('✅ Xử lý OCR thành công! Đang mở giao diện so sánh...');
+      setStageText('Chuyển đổi hoàn tất thành công!');
 
       const docxBlob = new Blob([response.data], {
         type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       });
+      const originalBlob = new Blob([file], { type: file.type });
+      const originalUrl = URL.createObjectURL(originalBlob);
 
-      const baseName = currentFile.name.substring(0, currentFile.name.lastIndexOf('.')) || currentFile.name;
-      const downloadFilename = `${baseName}_ocr.docx`;
-      const originalUrl = window.URL.createObjectURL(currentFile);
-
-      const newProcessedFile: ProcessedFile = {
-        id: Math.random().toString(36).substr(2, 9),
-        originalName: currentFile.name,
-        downloadName: downloadFilename,
-        docxBlob: docxBlob,
-        originalBlob: currentFile,
-        originalFileType: currentFile.type || (currentFile.name.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg'),
-        originalUrl: originalUrl,
+      const newFileItem: ProcessedFile = {
+        id: Date.now().toString(),
+        originalName: file.name,
+        downloadName: `OCR_${file.name.replace(/\.[^/.]+$/, '')}.docx`,
+        docxBlob,
+        originalBlob,
+        originalFileType: file.type,
+        originalUrl,
         timestamp: new Date().toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' }),
-        size: (currentFile.size / 1024 / 1024).toFixed(2) + ' MB'
+        size: (file.size / 1024 / 1024).toFixed(2) + ' MB',
       };
 
+      setProcessedFiles((prev) => [newFileItem, ...prev]);
+      setActiveFile(newFileItem);
+
       setTimeout(() => {
-        setProcessedFiles(prev => [newProcessedFile, ...prev]);
-        setActiveFile(newProcessedFile);
-        setFile(null);
         setLoading(false);
+        setProgress(0);
+        setStageText('');
+        setFile(null);
       }, 500);
 
     } catch (err: any) {
@@ -146,35 +152,6 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    let isMounted = true;
-    if (activeFile && viewerRef.current) {
-      viewerRef.current.innerHTML = '';
-      setRenderingDocx(true);
-
-      activeFile.docxBlob.arrayBuffer().then((arrayBuffer) => {
-        if (!isMounted || !viewerRef.current) return;
-        renderAsync(arrayBuffer, viewerRef.current, undefined, {
-          className: 'docx-render-page',
-          inWrapper: true,
-          ignoreWidth: false,
-          ignoreHeight: false,
-          debug: false,
-        })
-          .then(() => {
-            if (isMounted) setRenderingDocx(false);
-          })
-          .catch((err) => {
-            console.error('Lỗi hiển thị tệp Word:', err);
-            if (isMounted) setRenderingDocx(false);
-          });
-      });
-    }
-    return () => {
-      isMounted = false;
-    };
-  }, [activeFile]);
-
   const handleDownloadDocx = (item: ProcessedFile) => {
     const url = window.URL.createObjectURL(item.docxBlob);
     const a = document.createElement('a');
@@ -185,6 +162,8 @@ export default function App() {
     document.body.removeChild(a);
     window.URL.revokeObjectURL(url);
   };
+
+
 
   return (
     <div style={{ minHeight: '100vh', padding: '24px 32px', maxWidth: '1600px', margin: '0 auto' }}>
@@ -268,7 +247,6 @@ export default function App() {
                 <span style={{ fontSize: '15px', fontWeight: '800', color: '#2563eb' }}>{progress}%</span>
               </div>
 
-              {/* Progress track */}
               <div style={{ width: '100%', height: '10px', backgroundColor: '#e2e8f0', borderRadius: '20px', overflow: 'hidden' }}>
                 <div
                   style={{
@@ -420,26 +398,23 @@ export default function App() {
                   <span>✨ KHUNG PHẢI: KẾT QUẢ AI WORD (.DOCX)</span>
                 </div>
 
-                {renderingDocx ? (
-                  <span style={{ fontSize: '11px', fontWeight: '600', padding: '2px 8px', borderRadius: '4px', backgroundColor: '#fffbeb', color: '#b45309' }}>
-                    ⏳ Rendering...
-                  </span>
-                ) : (
-                  <span style={{ fontSize: '11px', fontWeight: '700', padding: '2px 8px', borderRadius: '4px', backgroundColor: '#ecfdf5', color: '#047857' }}>
-                    ✓ LIVE RENDERED
-                  </span>
-                )}
+                <span style={{ fontSize: '11px', fontWeight: '700', padding: '2px 8px', borderRadius: '4px', backgroundColor: '#ecfdf5', color: '#047857' }}>
+                  ✓ LIVE RENDERED
+                </span>
               </div>
 
               <div
-                ref={viewerRef}
                 style={{
                   height: `${viewHeight}px`,
                   overflowY: 'auto',
-                  backgroundColor: '#eef2f6',
+                  backgroundColor: '#f8fafc',
                   boxSizing: 'border-box'
                 }}
-              />
+              >
+                {activeFile && (
+                  <DocxRenderer blob={activeFile.docxBlob} />
+                )}
+              </div>
             </div>
 
           </div>

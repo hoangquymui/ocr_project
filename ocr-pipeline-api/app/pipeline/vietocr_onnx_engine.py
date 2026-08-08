@@ -3,13 +3,13 @@ import torch
 from vietocr.tool.predictor import Predictor
 from vietocr.tool.config import Cfg
 
-from app.config import MODEL_PT_PATH
+from app.pipeline.config import MODEL_PT_PATH
 
 
 class VietOCRONNXPredictor:
     """
     Bộ suy luận VietOCR được tăng tốc bằng C++ JIT Compiled Engine và Batch Inference.
-    Tự chứa hoàn toàn trong ocr-pipeline-api.
+    Tự chứa hoàn toàn trong ocr-pipeline-api/app/pipeline/.
     """
 
     def __init__(self, model_path=None):
@@ -20,6 +20,11 @@ class VietOCRONNXPredictor:
         self.base_predictor = Predictor(self.config)
         
         target_pt = model_path or MODEL_PT_PATH
+        if not os.path.exists(target_pt):
+            alt_pt = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "python", "models", "vietocr_vgg_cnn.pt"))
+            if os.path.exists(alt_pt):
+                target_pt = alt_pt
+
         if os.path.exists(target_pt):
             print(f"⚡ [API C++ JIT ENGINE] Nạp thành công mô hình C++ JIT từ: {target_pt}")
             try:

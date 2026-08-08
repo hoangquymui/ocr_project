@@ -165,36 +165,105 @@ body {
   animation: spin 1s linear infinite;
 }
 
-/* Docx Preview Container Custom Styling */
-.docx-render-page {
-  background: #eef2f6 !important;
-  padding: 24px 16px !important;
+/* Docx Preview Container Styling */
+.docx-wrapper {
+  background: #f1f5f9 !important;
+  padding: 16px 8px !important;
   display: flex !important;
   flex-direction: column !important;
   align-items: center !important;
   width: 100% !important;
   box-sizing: border-box !important;
   min-height: 100% !important;
+  overflow-x: auto !important;
 }
 
+.docx-wrapper > section.docx,
 .docx-render-page > section.docx {
   background: #ffffff !important;
   color: #0f172a !important;
-  box-shadow: 0 10px 25px -5px rgba(15, 23, 42, 0.1), 0 4px 6px -2px rgba(15, 23, 42, 0.04) !important;
-  border: 1px solid #cbd5e1 !important;
-  margin-bottom: 24px !important;
-  border-radius: 6px !important;
-  padding: 40px 48px !important;
+  box-shadow: 
+    0 8px 25px -4px rgba(15, 23, 42, 0.14),
+    0 0 0 1px rgba(226, 232, 240, 0.9) !important;
+  border-radius: 8px !important;
+  margin: 0 auto 20px auto !important;
   box-sizing: border-box !important;
-  width: 100% !important;
-  max-width: 800px !important;
+  zoom: 0.62 !important;
+  transform-origin: top center !important;
 }
 
+.docx-wrapper > section.docx *,
+.docx-render-page > section.docx * {
+  max-width: 100% !important;
+  box-sizing: border-box !important;
+}
+
+.docx-wrapper > section.docx p,
 .docx-render-page > section.docx p {
   color: #0f172a !important;
-  line-height: 1.65 !important;
+  line-height: 1.5 !important;
+  margin-bottom: 4px !important;
 }
 
+.docx-wrapper > section.docx span,
 .docx-render-page > section.docx span {
-  font-family: 'Times New Roman', serif !important;
+  font-family: 'Times New Roman', 'Liberation Serif', serif !important;
+}
+
+.docx-wrapper > section.docx table,
+.docx-render-page > section.docx table {
+  border-collapse: collapse !important;
+  margin: 8px 0 !important;
+  width: 100% !important;
+}
+
+.docx-wrapper > section.docx table td,
+.docx-wrapper > section.docx table th,
+.docx-render-page > section.docx table td,
+.docx-render-page > section.docx table th {
+  padding: 4px 8px !important;
+  font-size: 13px !important;
+}
+
+.docx-wrapper > section.docx:hover {
+  box-shadow: 
+    0 15px 35px -8px rgba(15, 23, 42, 0.16),
+    0 0 0 1px rgba(37, 99, 235, 0.3) !important;
+}
+
+/* Format Text & Typography Inside Rendered DOCX */
+.docx-wrapper > section.docx p,
+.docx-render-page > section.docx p {
+  color: #0f172a !important;
+  line-height: 1.5 !important;
+  margin-bottom: 4px !important;
+}
+
+.docx-wrapper > section.docx span,
+.docx-render-page > section.docx span {
+  font-family: 'Times New Roman', 'Liberation Serif', serif !important;
+}
+
+/* Polished Table Rendering */
+.docx-wrapper > section.docx table,
+.docx-render-page > section.docx table {
+  border-collapse: collapse !important;
+  margin: 8px 0 !important;
+  width: 100% !important;
+}
+
+.docx-wrapper > section.docx table td,
+.docx-wrapper > section.docx table th,
+.docx-render-page > section.docx table td,
+.docx-render-page > section.docx table th {
+  padding: 4px 8px !important;
+  font-size: 13px !important;
+}
+
+/* Formatted Embedded Images */
+.docx-wrapper > section.docx img,
+.docx-render-page > section.docx img {
+  max-width: 100% !important;
+  height: auto !important;
+  border-radius: 4px !important;
 }
